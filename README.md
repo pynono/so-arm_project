@@ -1,143 +1,183 @@
-vision/ — SO-ARM101 비전 실습 (학생용)
-카메라 브리지를 먼저 켜고, 항상 프로젝트 최상위 폴더에서 실행한다 (03이 만드는 data/H.npy 를 04/05가 같은 상대경로로 읽는다).
+# SO-ARM 색상 분류 — 개발 히스토리
 
-python vision/02_detect.py        # 예시
-진행 순서
-순서	파일	하는 일
-1	01_capture.py	공 사진을 shots/ 에 저장
-2	hsv_tuner.py	슬라이더로 공 색 HSV 범위 찾기 (완성본, p=값 출력)
-3	02_detect.py	HSV로 빨강/파랑 공 검출
-4	03_map.py	4점 캘리브레이션 → data/H.npy (강사와 함께, 완성본)
-5	04_click_move.py	클릭한 곳으로 로봇 이동
-6	05_track.py	빨간 공 실시간 추적
-TODO 사용법
-각 TODO 블록에는 할 일 / 키워드가 적혀 있다. 블록을 통째로 복사해 AI에게 물어봐도 된다 (예: "이 TODO를 구현해줘. 그리고 왜 그렇게 되는지 설명해줘").
-단, 받은 코드를 설명할 수 있어야 한다 — 어느 줄이 무엇을 하는지, 숫자를 바꾸면 무엇이 달라지는지.
-빈칸을 안 채우고 실행하면 프로그램이 무엇을 채워야 하는지 알려주고 멈춘다.
-결과
-SO-ARM 색상 분류 — 개발 히스토리
-프로젝트: soarm-team-sort · SO-ARM101 + HP60C
-목표: 빨강/파랑 공을 같은 색 박스에 분류
-스냅샷: vision/06_sort.py 기준 (Z_PICK=0.04, J6 2350/1750, load≥100)
+> **프로젝트:** `soarm-team-sort` · SO-ARM101 + HP60C  
+> **목표:** 빨강/파랑 공을 같은 색 박스에 분류  
+> **스냅샷:** `vision/06_sort.py` 기준 (`Z_PICK=0.04`, `J6` 2350/1750, load≥100)
 
-1. 프로젝트 개요
-한 줄로: 카메라로 공·박스를 한 번에 SCAN하고, 캐시된 XY로 접근한 뒤 그리퍼 부하로 파지를 확인한 다음, 같은 색 박스에 내려놓는다. 실패하면 SAFE → 재검출 → 재시도, 그래도 안 되면 전체 재SCAN.
+---
 
-항목	내용
-분류 순서	빨강 → 파랑
-제어 구조	SCAN ALL → ACT (색상별 반복)
-캘리브	16점 호모그래피 (data/H.npy, red8+blue8)
-파지 판정	get_load(6) 다수결 ≥ 100
-원본 handout	../soarm_provided_d (카메라 심볼릭 링크)
-2. 개발 타임라인
-위에서 아래로 실제 진행 순서. 각 단계는 무엇을 / 왜 / 결과.
+## 1. 프로젝트 개요
 
-Stage 01 — 비전 검출 · 카메라
-무엇을: HSV로 빨강/파랑 공·박스 분리 (detect_objects), HP60C → shm bridge → CameraReader
-왜: 분류의 입력은 픽셀 좌표; 공과 박스를 같은 색이라도 구분해야 함
-결과: 면적 임계(BOX_MIN_AREA, 기본 2500)로 ball / box 라벨. 노랑은 의도적으로 제외
-Stage 02 — 캘리브 진화 (8점 → 16점)
-무엇을: 초기 03_map 8점 호모그래피 → 03_calib_targets 16점(빨강8 + 파랑8)
-왜: 책상 전역 XY 오차 줄이기; 색별 배치 범위를 넓게 샘플
-결과: data/H.npy (3×3). 박스는 기존 JSON 보존 (기본 skip, --boxes만 재티칭). 상세는 §5
-Stage 03 — 분류 파이프라인 분리
-무엇을: SCAN ALL → ACT 구조 고정. ACT를 MOVE_TO_BALL / GRIP / MOVE_TO_BOX / PLACE / SAFE로 단계화
-왜: “한 번에 다 잡기”와 “한 개씩 동작”을 분리해야 재시도·복구가 가능
-결과: 파랑은 pick 직전 재검출로 캐시 갱신. 색 완료 후 SAFE, 전체 실패 시 재SCAN으로 미완료 재개
-Stage 04 — 그리퍼 · 부하 검증
-무엇을: j6 OPEN=2350 / CLOSE=1750 (실기 티칭). get_load(6) 5샘플/1초, 다수결 ≥100 → 파지 성공
-왜: 닫힘만으로는 미파지·슬램을 구분 못함
-결과: 실패 시 내려놓고 열기 → SAFE → 재검출 → 재시도 ×3 (GRIP_MAX_RETRIES)
-Stage 05 — 픽 시퀀스 · Z 튜닝
-무엇을: hover → 소프트 하강 → j6-only close → settle → test lift → verify
-왜: Z는 호모그래피로 안 맞춰짐. 너무 낮으면 바닥 슬램, 높으면 미파지
-결과: Z_PICK 이력 0.028 → 0.035 → 0.045 → 0.04 (현재 0.04 m). GRIP_DOWN_SECS=3.0
-Stage 06 — 거리적응 IK
-무엇을: 반경 r에 따라 hover 높이·j2/j3/j4 시드 블렌딩. 원거리 soft-down tilt (최대 ~25°)
-왜: 먼 공에서 관절이 과도하게 펴지며 불안정
-결과: 트래킹은 자세에 불필요 — 캐시 xy + 거리적응으로 충분 (R_NEAR=0.16, R_FAR=0.32)
-Stage 07 — Place 안정화
-무엇을: 박스 접근 5초(BOX_APPROACH_SECS) · 이동 중 닫힘 유지. 도착·하강 후에만 DROP_J6 개방
-왜: 운반 중 조기 개방으로 공을 떨어뜨리는 문제
-결과: place 타이밍 안정. 색 완료 후 SAFE
-3. 현재 파이프라인
-메인 루프: 색상마다 ACT 반복 (red 후 blue).
+한 줄로: 카메라로 공·박스를 **한 번에 SCAN**하고, 캐시된 XY로 접근한 뒤 **그리퍼 부하로 파지를 확인**한 다음, 같은 색 박스에 내려놓는다. 실패하면 SAFE → 재검출 → 재시도, 그래도 안 되면 전체 재SCAN.
 
+| 항목 | 내용 |
+|------|------|
+| 분류 순서 | 빨강 → 파랑 |
+| 제어 구조 | SCAN ALL → ACT (색상별 반복) |
+| 캘리브 | 16점 호모그래피 (`data/H.npy`, red8+blue8) |
+| 파지 판정 | `get_load(6)` 다수결 ≥ 100 |
+| 원본 handout | `../soarm_provided_d` (카메라 심볼릭 링크) |
+
+---
+
+## 2. 개발 타임라인
+
+위에서 아래로 실제 진행 순서. 각 단계는 **무엇을 / 왜 / 결과**.
+
+### Stage 01 — 비전 검출 · 카메라
+
+- **무엇을:** HSV로 빨강/파랑 공·박스 분리 (`detect_objects`), HP60C → shm bridge → `CameraReader`
+- **왜:** 분류의 입력은 픽셀 좌표; 공과 박스를 같은 색이라도 구분해야 함
+- **결과:** 면적 임계(`BOX_MIN_AREA`, 기본 2500)로 `ball` / `box` 라벨. 노랑은 의도적으로 제외
+
+### Stage 02 — 캘리브 진화 (8점 → 16점)
+
+- **무엇을:** 초기 `03_map` 8점 호모그래피 → `03_calib_targets` 16점(빨강8 + 파랑8)
+- **왜:** 책상 전역 XY 오차 줄이기; 색별 배치 범위를 넓게 샘플
+- **결과:** `data/H.npy` (3×3). **박스는 기존 JSON 보존** (기본 skip, `--boxes`만 재티칭). 상세는 [§5](#5-캘리브레이션-8점--16점)
+
+### Stage 03 — 분류 파이프라인 분리
+
+- **무엇을:** SCAN ALL → ACT 구조 고정. ACT를 `MOVE_TO_BALL` / `GRIP` / `MOVE_TO_BOX` / `PLACE` / `SAFE`로 단계화
+- **왜:** “한 번에 다 잡기”와 “한 개씩 동작”을 분리해야 재시도·복구가 가능
+- **결과:** 파랑은 pick 직전 재검출로 캐시 갱신. 색 완료 후 SAFE, 전체 실패 시 재SCAN으로 미완료 재개
+
+### Stage 04 — 그리퍼 · 부하 검증
+
+- **무엇을:** j6 OPEN=2350 / CLOSE=1750 (실기 티칭). `get_load(6)` 5샘플/1초, 다수결 ≥100 → 파지 성공
+- **왜:** 닫힘만으로는 미파지·슬램을 구분 못함
+- **결과:** 실패 시 내려놓고 열기 → SAFE → 재검출 → 재시도 ×3 (`GRIP_MAX_RETRIES`)
+
+### Stage 05 — 픽 시퀀스 · Z 튜닝
+
+- **무엇을:** hover → 소프트 하강 → j6-only close → settle → test lift → verify
+- **왜:** Z는 호모그래피로 안 맞춰짐. 너무 낮으면 바닥 슬램, 높으면 미파지
+- **결과:** `Z_PICK` 이력 `0.028 → 0.035 → 0.045 → 0.04` **(현재 0.04 m)**. `GRIP_DOWN_SECS=3.0`
+
+### Stage 06 — 거리적응 IK
+
+- **무엇을:** 반경 `r`에 따라 hover 높이·j2/j3/j4 시드 블렌딩. 원거리 soft-down tilt (최대 ~25°)
+- **왜:** 먼 공에서 관절이 과도하게 펴지며 불안정
+- **결과:** 트래킹은 자세에 불필요 — 캐시 xy + 거리적응으로 충분 (`R_NEAR=0.16`, `R_FAR=0.32`)
+
+### Stage 07 — Place 안정화
+
+- **무엇을:** 박스 접근 5초(`BOX_APPROACH_SECS`) · 이동 중 닫힘 유지. 도착·하강 후에만 `DROP_J6` 개방
+- **왜:** 운반 중 조기 개방으로 공을 떨어뜨리는 문제
+- **결과:** place 타이밍 안정. 색 완료 후 SAFE
+
+---
+
+## 3. 현재 파이프라인
+
+메인 루프: **색상마다 ACT 반복** (red 후 blue).
+
+```
 SCAN ALL → MOVE_TO_BALL → GRIP → MOVE_TO_BOX → PLACE → SAFE
    │                                                      │
    └──────── 실패 시 재SCAN / 미완료 색만 재개 ←───────────┘
-단계	역할
-SCAN ALL	공·박스 캐시 (정착 후 plan)
-MOVE_TO_BALL	거리적응 hover, j6 OPEN
-GRIP	하강 → 닫기 → 시험 상승 → load 검증
-MOVE_TO_BOX	5s 접근 · 닫힘 유지
-PLACE	하강 후 개방
-SAFE	색 완료 / 복구 자세
-GRIP 세부 (성공 경로)
-호버 도착 — 거리적응 Z_HOVER · j6 OPEN
-소프트 하강 — Z_PICK · GRIP_DOWN_SECS=3s
-j6만 닫기 — GRIP_CLOSE=1750 · settle 1.35s
-시험 상승 — Z_PICK+2.5cm · ~0.8s
-파지 검증 — get_load(6)×5 · 다수≥3이 thresh 이상
-실패 복구: verify miss → 내려놓고 열기 → SAFE → 재검출 → MOVE→GRIP 재시도 (×3).
-그래도 실패하면 SAFE → 전체 재SCAN → 미완료 색만 재개. 재검출 타임아웃도 recoverable.
+```
 
-4. 핵심 파라미터 표
-소스: soarm-team-sort/vision/06_sort.py · data/H.npy (16 balls)
+| 단계 | 역할 |
+|------|------|
+| SCAN ALL | 공·박스 캐시 (정착 후 plan) |
+| MOVE_TO_BALL | 거리적응 hover, j6 OPEN |
+| GRIP | 하강 → 닫기 → 시험 상승 → load 검증 |
+| MOVE_TO_BOX | 5s 접근 · 닫힘 유지 |
+| PLACE | 하강 후 개방 |
+| SAFE | 색 완료 / 복구 자세 |
 
-이름	값	역할
-Z_PICK	0.04 m	픽 하강 높이 (0.028→0.035→0.045→0.04)
-Z_TEST_LIFT	Z_PICK+0.025	닫힌 뒤 시험 상승 (~2.5 cm)
-Z_HOVER / NEAR / FAR	0.13 / 0.11 / 0.17	기본·근거리·원거리 호버
-Z_CARRY / Z_PLACE	0.14 / 0.06	운반 · 박스 하강
-R_NEAR / R_FAR	0.16 / 0.32	거리적응 반경 (m)
-DOWN_TILT_FAR_DEG	25.0	원거리 soft-down tilt 최대
-J6_OPEN / GRIP_CLOSE	2350 / 1750	개방 · 파지 (raw)
-GRIP_LOAD_THRESH	100	get_load(6) ≥ → 잡은 것
-Load 샘플	5×0.2s, 다수≥3	1초 다수결 검증
-GRIP_DOWN_SECS	3.0 s	호버→픽 하강 시간
-GRIP_CLOSE_SETTLE_SECS	1.35 s	닫힘 완료 대기
-PICK / BOX approach	5.0 / 5.0 s	공·박스 접근
-H.npy	16 pts	red8+blue8 호모그래피
-GRIP_MAX_RETRIES	3	SAFE/재검출 픽 사이클
-BOX_MIN_AREA	2500	contour area → box 판정
-SAFE_POSE	j1…j6 고정	복구·색 완료 자세 (j6=OPEN)
-5. 캘리브레이션 (8점 → 16점)
-초기 (8점)
-스크립트: vision/03_map.py
-방식: 소수의 티칭점으로 findHomography → data/H.npy
-한계: 책상 가장자리·색별 배치에서 XY 오차 큼
-현재 (16점 — red8 + blue8)
-스크립트: vision/03_calib_targets.py
-Phase 1 — BALL: 빨간 공 8점 → 파란 공 8점 (책상에 넓게). 픽셀(u,v) + FK → 16점 호모그래피 → data/H.npy
-Phase 2 — BOX: 기본 skip (기존 JSON 박스 유지). --boxes로만 재티칭. H는 재계산하지 않음
-산출물:
-data/H.npy — ball-16 호모그래피
-data/map_calib.json — balls(16) / boxes(4) / size_z / taught places …
-설계 의도: XY는 공 16점으로만 맞추고, 박스 place는 별도 티칭·보존. 캘리브할 때마다 박스를 다시 잡지 않아도 됨.
+### GRIP 세부 (성공 경로)
 
-6. 알려진 이슈 / 다음 과제
-이슈
-이슈	내용
-XY vs Z	호모그래피는 XY만. Z는 상수/튜닝이라 책상·공 높이 변화에 민감
-Floor slam	하강이 빠르거나 Z_PICK이 낮으면 그리퍼가 바닥을 찍음
-원거리 자세	먼 공에서 j2/j3/j4가 과도하게 펴짐. 거리적응으로 완화했지만 가장자리는 취약
-Load miss ≈ 32	미파지 시 get_load(6)이 ~32 근처. thresh=100과 구분은 되나 empty/good/wrong-catch 분포는 --measure-load로 재확인
-다음으로 손볼 곳
-원거리 시드 재튜닝
-Z_PICK 현장 재측정
-load 프로파일로 thresh 검증
-박스 taught place와 비전 박스 불일치 시 fallback 점검
-7. 주요 파일 경로
-경로	역할
-vision/06_sort.py	분류 메인 — SCAN/ACT/GRIP/PLACE/복구
-vision/03_calib_targets.py	16점 공 캘리브 · 박스 보존
-vision/03_map.py	(구) 8점 캘리브
-vision/detect_objects.py	HSV 빨강/파랑 · ball/box 면적 분류
-vision/02_detect.py	검출 시각화
-data/H.npy	픽셀 → 로봇 XY 호모그래피 (16점)
-data/map_calib.json	balls/boxes/size_z · taught places
-soarm_lab/driver_sdk.py	서보 · get_load(6) · set positions
-soarm_lab/ik_core.py	IK
-hp60c-camera/	카메라 bridge / shm (심볼릭 링크)
-scripts/start_camera.sh	카메라 브리지 기동
+1. **호버 도착** — 거리적응 `Z_HOVER` · j6 OPEN
+2. **소프트 하강** — `Z_PICK` · `GRIP_DOWN_SECS=3s`
+3. **j6만 닫기** — `GRIP_CLOSE=1750` · settle 1.35s
+4. **시험 상승** — `Z_PICK+2.5cm` · ~0.8s
+5. **파지 검증** — `get_load(6)×5` · 다수≥3이 thresh 이상
+
+> **실패 복구:** verify miss → 내려놓고 열기 → SAFE → 재검출 → MOVE→GRIP 재시도 (×3).  
+> 그래도 실패하면 SAFE → 전체 재SCAN → 미완료 색만 재개. 재검출 타임아웃도 recoverable.
+
+---
+
+## 4. 핵심 파라미터 표
+
+소스: `soarm-team-sort/vision/06_sort.py` · `data/H.npy` (16 balls)
+
+| 이름 | 값 | 역할 |
+|------|-----|------|
+| `Z_PICK` | **0.04 m** | 픽 하강 높이 (0.028→0.035→0.045→0.04) |
+| `Z_TEST_LIFT` | `Z_PICK+0.025` | 닫힌 뒤 시험 상승 (~2.5 cm) |
+| `Z_HOVER` / NEAR / FAR | 0.13 / 0.11 / 0.17 | 기본·근거리·원거리 호버 |
+| `Z_CARRY` / `Z_PLACE` | 0.14 / 0.06 | 운반 · 박스 하강 |
+| `R_NEAR` / `R_FAR` | 0.16 / 0.32 | 거리적응 반경 (m) |
+| `DOWN_TILT_FAR_DEG` | 25.0 | 원거리 soft-down tilt 최대 |
+| `J6_OPEN` / `GRIP_CLOSE` | **2350 / 1750** | 개방 · 파지 (raw) |
+| `GRIP_LOAD_THRESH` | **100** | `get_load(6) ≥` → 잡은 것 |
+| Load 샘플 | 5×0.2s, 다수≥3 | 1초 다수결 검증 |
+| `GRIP_DOWN_SECS` | 3.0 s | 호버→픽 하강 시간 |
+| `GRIP_CLOSE_SETTLE_SECS` | 1.35 s | 닫힘 완료 대기 |
+| PICK / BOX approach | 5.0 / 5.0 s | 공·박스 접근 |
+| `H.npy` | 16 pts | red8+blue8 호모그래피 |
+| `GRIP_MAX_RETRIES` | 3 | SAFE/재검출 픽 사이클 |
+| `BOX_MIN_AREA` | 2500 | contour area → box 판정 |
+| `SAFE_POSE` | j1…j6 고정 | 복구·색 완료 자세 (j6=OPEN) |
+
+---
+
+## 5. 캘리브레이션 (8점 → 16점)
+
+### 초기 (8점)
+
+- 스크립트: `vision/03_map.py`
+- 방식: 소수의 티칭점으로 `findHomography` → `data/H.npy`
+- 한계: 책상 가장자리·색별 배치에서 XY 오차 큼
+
+### 현재 (16점 — red8 + blue8)
+
+- 스크립트: `vision/03_calib_targets.py`
+- **Phase 1 — BALL:** 빨간 공 8점 → 파란 공 8점 (책상에 넓게). 픽셀(u,v) + FK → 16점 호모그래피 → `data/H.npy`
+- **Phase 2 — BOX:** 기본 **skip** (기존 JSON 박스 유지). `--boxes`로만 재티칭. H는 재계산하지 않음
+- 산출물:
+  - `data/H.npy` — ball-16 호모그래피
+  - `data/map_calib.json` — balls(16) / boxes(4) / size_z / taught places …
+
+> **설계 의도:** XY는 공 16점으로만 맞추고, 박스 place는 별도 티칭·보존. 캘리브할 때마다 박스를 다시 잡지 않아도 됨.
+
+---
+
+## 6. 알려진 이슈 / 다음 과제
+
+### 이슈
+
+| 이슈 | 내용 |
+|------|------|
+| XY vs Z | 호모그래피는 XY만. Z는 상수/튜닝이라 책상·공 높이 변화에 민감 |
+| Floor slam | 하강이 빠르거나 `Z_PICK`이 낮으면 그리퍼가 바닥을 찍음 |
+| 원거리 자세 | 먼 공에서 j2/j3/j4가 과도하게 펴짐. 거리적응으로 완화했지만 가장자리는 취약 |
+| Load miss ≈ 32 | 미파지 시 `get_load(6)`이 ~32 근처. thresh=100과 구분은 되나 empty/good/wrong-catch 분포는 `--measure-load`로 재확인 |
+
+### 다음으로 손볼 곳
+
+- 원거리 시드 재튜닝
+- `Z_PICK` 현장 재측정
+- load 프로파일로 thresh 검증
+- 박스 taught place와 비전 박스 불일치 시 fallback 점검
+
+---
+
+## 7. 주요 파일 경로
+
+| 경로 | 역할 |
+|------|------|
+| `vision/06_sort.py` | 분류 메인 — SCAN/ACT/GRIP/PLACE/복구 |
+| `vision/03_calib_targets.py` | 16점 공 캘리브 · 박스 보존 |
+| `vision/03_map.py` | (구) 8점 캘리브 |
+| `vision/detect_objects.py` | HSV 빨강/파랑 · ball/box 면적 분류 |
+| `vision/02_detect.py` | 검출 시각화 |
+| `data/H.npy` | 픽셀 → 로봇 XY 호모그래피 (16점) |
+| `data/map_calib.json` | balls/boxes/size_z · taught places |
+| `soarm_lab/driver_sdk.py` | 서보 · `get_load(6)` · set positions |
+| `soarm_lab/ik_core.py` | IK |
+| `hp60c-camera/` | 카메라 bridge / shm (심볼릭 링크) |
+| `scripts/start_camera.sh` | 카메라 브리지 기동 |
