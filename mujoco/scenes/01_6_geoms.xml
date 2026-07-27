@@ -1,0 +1,39 @@
+<mujoco>
+    <asset>
+        <texture name="grid" type="2d" builtin="checker"
+            rgb1="0.2 0.3 0.4" rgb2="0.3 0.4 0.5" width="300" height="300"/>
+        <texture type="skybox" builtin="gradient"
+            rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>    
+        <material name="grid" texture="grid" texrepeat="6 6" reflectance="1.0"/>
+    </asset> 
+    
+    <worldbody>
+        <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+        <geom type="plane" size="1 1 0.1" material="grid"/>
+        
+        <body pos="-0.3 0 0.5">
+            <freejoint/>
+            <geom type="sphere" size="0.05" rgba="1 0 0 1"/>
+        </body>
+
+        <body pos="-0.5 0 0.5">
+            <freejoint/>
+            <geom type="box" size="0.05 0.05 0.05" rgba="1 0 1 1"/>
+        </body>
+        
+        <body pos="-0.1 0 0.5">
+            <freejoint/>
+            <geom type="capsule" size="0.05 0.1" rgba="1 1 0 1"/>
+        </body>
+
+        <body pos="0.1 0 0.5">
+            <freejoint/>
+            <geom type="cylinder" size="0.05 0.1" rgba="1 1 1 1"/>
+        </body>
+
+        <body pos="0.3 0 0.5">
+            <freejoint/>
+            <geom type="ellipsoid" size="0.03 0.08 0.05" rgba="1 0 1 1"/>
+        </body>
+    </worldbody>
+</mujoco>

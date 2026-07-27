@@ -1,0 +1,16 @@
+<mujoco>
+    <asset>
+        <texture name="grid" type="2d" builtin="checker"
+            rgb1="0.2 0.3 0.4" rgb2="0.3 0.4 0.5" width="300" height="300"/>
+        <texture type="skybox" builtin="gradient"
+            rgb1="0.3 0.5 0.7" rgb2 ="0 0 0"width="512"height="512"/>    
+        <material name="grid" texture="grid" texrepeat="6 6"/>
+    </asset> 
+    <worldbody>
+        <geom type="plane" size="1 1 0.1" material="grid"/>
+        <body pos="0 0 0.3">
+            <freejoint/>
+            <geom type="sphere" size="0.01" rgba="1 0 0 1"/>
+        </body>
+    </worldbody>
+</mujoco>
