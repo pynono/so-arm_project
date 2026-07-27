@@ -1,0 +1,23 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.vscode/
+.idea/
+.DS_Store
+docs/
+
+# runtime-generated
+data/poses.json
+data/calibration.json
+data/recordings/*.json
+!data/recordings/.gitkeep
+
+# calibration backups (per-robot working file is data/calibration.json)
+data/*.bak.json
+
+# old files that were replaced
+saved_poses.json
+recordings/
+
+

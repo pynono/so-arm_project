@@ -1,0 +1,3 @@
+mujoco
+numpy
+pyserial    # 실물(driver_sdk) 사용 시에만 필요

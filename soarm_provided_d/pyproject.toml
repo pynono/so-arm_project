@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soarm-lab"
+version = "0.1.0"
+description = "SO-ARM101 실습 제공물 — 좌표 → IK → 시뮬/실물 제어"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.20",
+    "pyserial>=3.5",
+    "mujoco>=3.0",
+]
+
+[tool.setuptools]
+packages = ["soarm_lab"]

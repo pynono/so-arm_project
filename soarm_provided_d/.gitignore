@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# CMake
+bridge/build/
+
+# 로봇 개체별 보정값 (각자 캘리브 — 공유/커밋 금지)
+data/calibration.json
+data/
+
+# 로컬 설정·비밀
+.env
+.env.*
+*.local
+
+# 에디터 · OS
+.vscode/
+.idea/
+.DS_Store
+
+# test
+my_*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# 비전 실습 런타임 산출물(학생 각자 생성)
+vision/shots/
+vision/collected/
+vision/data/
+vision/**/__pycache__/

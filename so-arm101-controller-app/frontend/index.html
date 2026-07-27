@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SO-ARM101 Controller</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%BE%3C/text%3E%3C/svg%3E" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- On-page diagnostic overlay — visible to the user without opening
+       dev tools. Surfaces JS load failures (import-map mismatch, missing
+       vendor files, etc.) that would otherwise leave the UI silently
+       non-functional. -->
+  <div id="diag" style="position:fixed;top:8px;left:50%;transform:translateX(-50%);
+       max-width:80vw;z-index:10000;display:none;background:#2a0f14;color:#ff8a9b;
+       border:1px solid #ff5a70;border-radius:8px;padding:10px 14px;
+       font:12px/1.4 'JetBrains Mono',ui-monospace,monospace;
+       white-space:pre-wrap;word-break:break-word;
+       box-shadow:0 8px 24px rgba(0,0,0,.4)"></div>
+  <script>
+    (function () {
+      const d = document.getElementById("diag");
+      const seen = new Set();
+
+      // Known-benign browser messages we never want to surface.
+      // Most of these come from browser extensions injecting code into
+      // every page — they have nothing to do with this app.
+      const IGNORE = [
+        /ResizeObserver loop /,                    // harmless layout-phase warning
+        /Non-Error promise rejection captured/,    // noise some tooling emits
+        /MetaMask/i,                                // wallet extension
+        /Failed to connect to MetaMask/i,          // (same — explicit)
+        /ethereum/i,                                // web3 wallet probing
+        /chrome-extension:/i,                       // any Chrome extension
+        /moz-extension:/i,                          // any Firefox extension
+        /Could not establish connection.*Receiving end does not exist/i,
+      ];
+
+      function show(kind, msg) {
+        if (IGNORE.some((re) => re.test(msg))) return;
+        // Deduplicate: one identical message shouldn't carpet the screen.
+        const key = `${kind}::${msg}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        d.style.display = "block";
+        if (!d.querySelector(".diag-head")) {
+          const h = document.createElement("div");
+          h.className = "diag-head";
+          h.style.cssText = "display:flex;justify-content:space-between;" +
+                            "gap:12px;margin-bottom:6px;font-weight:600;";
+          h.innerHTML = "<span>Startup diagnostic</span>" +
+                        "<span style='cursor:pointer;opacity:.7' " +
+                        "onclick='document.getElementById(\"diag\").style.display=\"none\"'>✕</span>";
+          d.prepend(h);
+        }
+        const line = document.createElement("div");
+        line.textContent = `[${kind}] ${msg}`;
+        d.appendChild(line);
+      }
+
+      window.addEventListener("error", (e) => {
+        if (e.target && e.target.src) {
+          show("load-fail", `<${e.target.tagName}> ${e.target.src}`);
+        } else if (e.message) {
+          show("error", `${e.message} @ ${e.filename}:${e.lineno}`);
+        }
+      }, true);
+      window.addEventListener("unhandledrejection", (e) => {
+        show("promise", e.reason?.message || String(e.reason));
+      });
+
+      // If app.js never flips the flag within 5 s, something's wrong.
+      window.__soarmBooted = false;
+      setTimeout(() => {
+        if (!window.__soarmBooted) {
+          show("boot-timeout",
+            "app.js did not execute. Check Network tab for 404s on JS files.");
+        }
+      }, 5000);
+    })();
+  </script>
+
+  <div class="app">
+    <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" id="brand-mark"></div>
+        <div>
+          <div class="brand-name" id="brand-name">SO-ARM101</div>
+          <div class="brand-sub" id="brand-sub">Web Controller</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-page="control">
+          <span class="nav-ico">▣</span><span>Control</span>
+        </button>
+        <button class="nav-item" data-page="status">
+          <span class="nav-ico">◇</span><span>Status</span>
+        </button>
+        <button class="nav-item" data-page="teach">
+          <span class="nav-ico">◎</span><span>Teach &amp; Poses</span>
+        </button>
+        <button class="nav-item" data-page="record">
+          <span class="nav-ico">●</span><span>Record &amp; Play</span>
+        </button>
+      </nav>
+
+      <div class="spacer"></div>
+
+      <div class="conn-card">
+        <div class="conn-label">CONNECTION</div>
+        <input id="port-input" class="input" value="/dev/ttyACM0" spellcheck="false" />
+        <button id="connect-btn" class="btn btn-primary full">Connect</button>
+        <div id="conn-status" class="conn-status offline">
+          <span class="dot"></span><span class="txt">Disconnected</span>
+        </div>
+      </div>
+
+      <div class="ctrl-card" id="ctrl-card">
+        <div class="conn-label">DRIVER</div>
+        <input id="ctrl-name" class="input slim" placeholder="your name" maxlength="24" />
+        <div id="ctrl-perm" class="ctrl-perm permitted">
+          <span class="dot"></span><span class="txt">Permitted</span>
+        </div>
+      </div>
+
+      <!-- Admin-only panel: revealed once /api/info reports is_admin=true,
+           which only happens for browsers running on the main PC itself
+           (loopback). Students on other laptops never see this. -->
+      <div class="team-card hidden" id="team-card">
+        <div class="conn-label">TEAM MEMBERS <span class="admin-tag">admin</span></div>
+        <div id="team-list" class="team-list"></div>
+      </div>
+    </aside>
+
+    <!-- ── Main content ──────────────────────────────────────────────────── -->
+    <main class="main">
+      <div id="revoked-banner" class="revoked-banner">
+        Your control was revoked by the instructor.
+      </div>
+      <header class="topbar">
+        <div class="topbar-left">
+          <div id="team-badge" class="team-badge hidden"></div>
+          <h1 id="page-title">Control</h1>
+        </div>
+        <div class="topbar-right">
+          <div class="pill" id="ws-pill"><span class="dot"></span>Live</div>
+          <div class="pill" id="lock-pill">—</div>
+          <button id="center-btn" class="btn btn-primary">Center All</button>
+          <button id="lock-btn" class="btn">Lock All</button>
+          <button id="unlock-btn" class="btn">Unlock All</button>
+        </div>
+      </header>
+
+      <!-- ── Control page ─────────────────────────────────────────────── -->
+      <section class="page" data-page="control">
+        <div class="grid-two">
+          <!-- Digital twin -->
+          <div class="card twin-card">
+            <div class="card-head">
+              <h2>Digital Twin</h2>
+              <div class="card-actions">
+                <button id="twin-reset" class="chip">Reset View</button>
+                <button id="twin-mesh" class="chip active">Mesh</button>
+                <button id="twin-wire" class="chip">Wireframe</button>
+              </div>
+            </div>
+            <div id="twin-viewport" class="twin-viewport">
+              <div class="twin-overlay">
+                <div class="hud-block">
+                  <div class="hud-label">End effector</div>
+                  <div class="hud-value" id="hud-eef">— , — , — m</div>
+                </div>
+                <div class="hud-block">
+                  <div class="hud-label">Frame</div>
+                  <div class="hud-value" id="hud-fps">0 Hz</div>
+                </div>
+              </div>
+              <div id="twin-loader" class="twin-loader">loading meshes…</div>
+            </div>
+          </div>
+
+          <!-- Joint sliders -->
+          <div class="card">
+            <div class="card-head">
+              <h2>Joint Control</h2>
+              <div class="card-actions">
+                <label class="inline">
+                  Speed
+                  <input id="speed" type="range" min="50" max="1000" step="10" value="200" />
+                  <span id="speed-val" class="mono">200</span>
+                </label>
+              </div>
+            </div>
+            <div id="joints" class="joint-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Status page ─────────────────────────────────────────────── -->
+      <section class="page hidden" data-page="status">
+        <div class="card">
+          <div class="card-head">
+            <h2>Servo Status</h2>
+            <div class="card-actions">
+              <button id="status-refresh" class="btn">Refresh</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl" id="status-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Joint</th>
+                  <th>Online</th>
+                  <th>Position</th>
+                  <th>Angle</th>
+                  <th>Temp</th>
+                  <th>Voltage</th>
+                  <th>Load</th>
+                  <th>Torque</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid-three">
+          <div class="metric-card">
+            <div class="metric-label">Connection</div>
+            <div class="metric-value" id="m-conn">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Serial Port</div>
+            <div class="metric-value mono" id="m-port">—</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Online Servos</div>
+            <div class="metric-value" id="m-online">0 / 6</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Teach page ─────────────────────────────────────────────── -->
+      <section class="page hidden" data-page="teach">
+        <div class="card">
+          <div class="card-head">
+            <h2>Teach Mode</h2>
+          </div>
+          <p class="hint">Unlock joints, move the arm by hand, then save the pose.</p>
+          <div class="pose-grid" id="pose-grid"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Saved Poses</h2>
+            <div class="card-actions row">
+              <input id="pose-name" class="input slim" placeholder="pose name" />
+              <button id="pose-save" class="btn btn-primary">Save</button>
+              <button id="pose-go" class="btn">Go To</button>
+              <button id="pose-delete" class="btn btn-danger">Delete</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl selectable" id="pose-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Name</th>
+                  <th>Base</th><th>Shoulder</th><th>Elbow</th>
+                  <th>WristP</th><th>WristR</th><th>Gripper</th>
+                  <th>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Record page ─────────────────────────────────────────────── -->
+      <section class="page hidden" data-page="record">
+        <div class="card">
+          <div class="card-head">
+            <h2>Record &amp; Play</h2>
+            <div class="card-actions">
+              <span class="pill" id="rec-state"><span class="dot"></span>Idle</span>
+              <span class="pill" id="rec-count">Frames: 0</span>
+            </div>
+          </div>
+
+          <!-- 새로 녹화하기: 손으로 움직여 하나 만든다 -->
+          <div class="toolbar">
+            <button id="rec-unlock" class="btn">Unlock All</button>
+            <input id="rec-filename" class="input slim" placeholder="recording name (optional)" />
+            <button id="rec-toggle" class="btn btn-danger">● Record</button>
+            <label class="inline">
+              Interval(ms)
+              <input id="rec-interval" type="number" min="20" max="2000" step="10" value="100" class="input slim mono" />
+            </label>
+          </div>
+
+          <!-- 재생 옵션 -->
+          <div class="toolbar">
+            <button id="play-stop" class="btn">■ Stop playback</button>
+          </div>
+
+          <!-- 저장된 녹화 목록: 골라서 바로 재생 -->
+          <div class="table-wrap scroll">
+            <table class="tbl" id="rec-list-table">
+              <thead>
+                <tr><th>Recording</th><th>Frames</th><th>Length</th><th></th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <p id="rec-empty" style="padding:12px;color:#8a8a8a">
+              아직 녹화가 없어요. <b>Unlock All</b> → <b>● Record</b> → 손으로 팔을 움직이고 → <b>■ Stop</b>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span id="toast" class="toast"></span>
+      </footer>
+    </main>
+  </div>
+
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
