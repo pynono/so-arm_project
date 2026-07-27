@@ -37,11 +37,13 @@ class IKSo101:
         self.hi = np.array([self.fk.limits_rad[n][1] for n in self.fk.names])
 
     def solve(self, target_m, seed_deg=None, iters=300, tol=5e-5, damp=0.03,
-              down=False):
+              down=False, down_tilt_deg=0.0):
         """목표 위치(m, 3벡터) → 관절각(도 5개), 잔차(m).
         seed_deg: 시작 추정치(도). None이면 여러 랜덤시드로 재시도.
         down=True: 그리퍼가 '수직 아래를 보는' 자세 조건 추가 (파지용).
-                   오차·자코비안에 방향 3줄이 더 붙을 뿐, 나머지는 동일한 DLS."""
+                   오차·자코비안에 방향 3줄이 더 붙을 뿐, 나머지는 동일한 DLS.
+        down_tilt_deg: down 모드에서 수직에서 바깥(방사)으로 기울일 각도(도).
+                       멀리 집을 때 j2/j3/j4가 덜 뻗친 자세를 쓰기 위함."""
         target = np.asarray(target_m, float)
         seeds = []
         if seed_deg is not None:
@@ -53,7 +55,7 @@ class IKSo101:
                   np.radians([0, 60, -90, 30, 0]),
                   np.radians([45, 20, -20, 0, 0])]
         if down:
-            return self._solve_down(target, seeds)
+            return self._solve_down(target, seeds, down_tilt_deg=down_tilt_deg)
         best_q, best_err = None, np.inf
         for q0 in seeds:
             q = np.clip(q0.copy(), self.lo, self.hi)
@@ -97,13 +99,26 @@ class IKSo101:
         appr = R.T @ (v / np.linalg.norm(v))
         self._mj = (mujoco, m, d, sid, appr)
 
-    def _solve_down(self, target, seeds, iters=200, kr=0.5, damp=0.04):
-        """위치 + '그리퍼가 수직 아래를 본다' 자세 조건의 DLS.
-        오차 6개(위치3+방향3), 자코비안 6x5 — 구조는 위치 IK와 동일."""
+    def _solve_down(self, target, seeds, iters=200, kr=0.5, damp=0.04,
+                    down_tilt_deg=0.0):
+        """위치 + '그리퍼가 아래를 본다' 자세 조건(선택적 방사 기울기)의 DLS.
+        오차 6개(위치3+방향3), 자코비안 6x5 — 구조는 위치 IK와 동일.
+        down_tilt_deg=0 → 순수 수직 [0,0,-1]; >0 → 목표 XY 바깥쪽으로 기울임."""
         if not hasattr(self, "_mj"):
             self._prep_down()
         mujoco, m, d, sid, appr = self._mj
-        down_dir = np.array([0.0, 0.0, -1.0])
+        tilt = float(down_tilt_deg)
+        if abs(tilt) < 1e-6:
+            down_dir = np.array([0.0, 0.0, -1.0])
+        else:
+            xy = np.asarray(target[:2], float)
+            r = float(np.linalg.norm(xy))
+            if r < 1e-6:
+                down_dir = np.array([0.0, 0.0, -1.0])
+            else:
+                ux, uy = xy[0] / r, xy[1] / r
+                a = np.radians(tilt)
+                down_dir = np.array([np.sin(a) * ux, np.sin(a) * uy, -np.cos(a)])
         best_q, best_err = None, np.inf
         for q0 in seeds:
             q = np.clip(np.asarray(q0, float).copy(), self.lo, self.hi)

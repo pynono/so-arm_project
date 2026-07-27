@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
-"""03_calib_targets.py — 공/박스 분리 캘리브 (BALL 8점 + BOX 4점).
+"""03_calib_targets.py — 공/박스 분리 캘리브 (BALL 16점 + BOX 기존 유지).
 
-Phase 1 — BALL [i/8]
-  빨간/파란 공을 책상에 넓게 두고 샘플 수집.
-  픽셀(u,v,+r) 확정 → 팔끝 FK → findHomography → data/H.npy
+Phase 1 — BALL [i/16]
+  빨간 공 8점 → 파란 공 8점 (책상에 넓게).
+  픽셀(u,v,+r) 확정 → 팔끝 FK → findHomography(16점) → data/H.npy
 
-Phase 2 — BOX [i/4]
+Phase 2 — BOX (기본: skip, 기존 JSON 유지)
+  --boxes 로만 재티칭. 기본은 map_calib/targets 의 boxes 보존.
   빨간 박스 2점 + 파란 박스 2점 (중심/모서리/place).
   픽셀↔로봇 연관을 JSON boxes 섹션에 별도 저장 (H 재계산 안 함).
 
 노랑 제외. 공/박스는 면적 임계로 구분 (detect_objects 재사용).
 
 저장:
-  data/H.npy              — ball-8 호모그래피
+  data/H.npy              — ball-16 호모그래피
   data/map_calib.json     — balls / boxes / size_z …
   data/targets_calib.json — 동일 payload (별칭)
 
@@ -21,6 +22,7 @@ Phase 2 — BOX [i/4]
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import signal
@@ -59,9 +61,16 @@ OUT_H = os.path.join("data", "H.npy")
 OUT_MAP = os.path.join("data", "map_calib.json")
 OUT_TARGETS = os.path.join("data", "targets_calib.json")
 
-N_BALL = 8
+N_BALL_PER_COLOR = 8
+N_BALL = N_BALL_PER_COLOR * 2  # 8 red + 8 blue
 N_BOX = 4
 Z_AIR_THRESH = 0.12
+
+# Phase 1 order: red×8 then blue×8
+BALL_SLOTS = (
+    [("red", f"RED ball {i}/{N_BALL_PER_COLOR}") for i in range(1, N_BALL_PER_COLOR + 1)]
+    + [("blue", f"BLUE ball {i}/{N_BALL_PER_COLOR}") for i in range(1, N_BALL_PER_COLOR + 1)]
+)
 
 BOX_SLOTS = [
     ("red_box_1", "red", "빨간박스 #1 중심/모서리"),
@@ -186,8 +195,10 @@ def _hud(img, lines, color=(0, 255, 255)):
 
 def get_pixel(cam, phase, idx, total, want_kind, want_color=None, hint=""):
     tag = "BALL" if want_kind == "ball" else "BOX"
+    color_tag = (want_color or "").upper()
     # Avoid '/' and '[]' in Qt window titles (NULL window handler on some builds).
-    win = f"calib {tag} {idx} of {total}"
+    win = (f"calib {color_tag} {tag} {idx} of {total}"
+           if color_tag else f"calib {tag} {idx} of {total}")
     clicked = {}
     arm_at = time.monotonic() + 1.5
     last_det = None
@@ -240,9 +251,10 @@ def get_pixel(cam, phase, idx, total, want_kind, want_color=None, hint=""):
                        f"(ball<{BOX_MIN_AREA:.0f}<=box)")
                 _hud(rgb, [msg], (0, 200, 255))
 
+            color_line = f" COLOR={color_tag}" if color_tag else ""
             _hud(rgb, [
-                f"[{idx}/{total}] {tag}  phase={phase}",
-                hint or f"place {want_kind} · click or c",
+                f"[{idx}/{total}] {tag}{color_line}  phase={phase}",
+                hint or f"place {want_color or ''} {want_kind} · click or c",
                 "click / c=confirm · Esc=cancel",
             ])
             cv2.imshow(win, rgb)
@@ -337,12 +349,45 @@ def compute_H(samples):
     return H, worst
 
 
-def main():
+def load_existing_boxes():
+    """Preserve prior box teach data from map/targets calib JSON."""
+    for path in (OUT_MAP, OUT_TARGETS):
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"  warn: could not read {path}: {e}")
+            continue
+        boxes = data.get("boxes") or []
+        if boxes:
+            print(f"  loaded {len(boxes)} existing boxes from {path}")
+            return boxes, data.get("boxes_by_color")
+    print("  warn: no existing boxes found — boxes will be empty")
+    return [], None
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Ball/box calib: 16 balls, optional boxes")
+    p.add_argument(
+        "--boxes", action="store_true",
+        help="Also re-teach Phase 2 boxes (default: keep existing box data)",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
     os.makedirs("data", exist_ok=True)
     src = "detect_objects.py" if _DETECT is not None else "inline dual-red HSV"
     print(f"검출 소스: {src}  BOX_MIN_AREA={BOX_MIN_AREA}  MIN_AREA={MIN_AREA}")
-    print("=== Phase 1: BALL map 8점 (책상에 넓게) → H.npy ===")
-    print("=== Phase 2: BOX map 4점 (빨강2 + 파랑2) → JSON boxes ===")
+    print(f"=== Phase 1: BALL map {N_BALL}점 "
+          f"(RED×{N_BALL_PER_COLOR} → BLUE×{N_BALL_PER_COLOR}) → H.npy ===")
+    if args.boxes:
+        print("=== Phase 2: BOX map 4점 (빨강2 + 파랑2) → JSON boxes ===")
+    else:
+        print("=== Phase 2: BOX skip — keep existing boxes from map/targets ===")
     print("키: 클릭/c=픽셀 · 팔끝 후 c/Enter · Esc=취소\n")
 
     drv = STS3215Driver(port=PORT)
@@ -350,17 +395,21 @@ def main():
     fk = FKSo101()
     ball_samples = []
     box_samples = []
+    boxes_by_color = None
 
     try:
-        with CameraReader() as cam:
-            for i in range(1, N_BALL + 1):
-                print(f"[{i}/{N_BALL}] BALL — 공을 놓고 클릭/c 후 팔끝 티칭")
+        with CameraReader(copy=True) as cam:
+            for i, (want_color, slot_hint) in enumerate(BALL_SLOTS, start=1):
+                print(f"[{i}/{N_BALL}] BALL {want_color.upper()} — "
+                      f"{slot_hint} · 클릭/c 후 팔끝 티칭")
                 u, v, r, area, bbox, color = get_pixel(
                     cam, "ball", i, N_BALL, want_kind="ball",
-                    hint="spread balls on table for better H",
+                    want_color=want_color,
+                    hint=f"{slot_hint} · spread on table",
                 )
                 xyz, deg = robot_sample(
-                    drv, fk, f"[{i}/{N_BALL}] BALL tip on ball → c/Enter")
+                    drv, fk,
+                    f"[{i}/{N_BALL}] {want_color.upper()} tip on ball → c/Enter")
                 air = xyz[2] >= Z_AIR_THRESH
                 print(f"  픽셀 ({u},{v}) {color} r={r} -> xyz "
                       f"({xyz[0]:+.3f},{xyz[1]:+.3f},{xyz[2]:+.3f}) "
@@ -377,29 +426,32 @@ def main():
                     "air": bool(air),
                 })
 
-            print("\n=== Phase 1 완료 → Phase 2: BOX ===\n")
-
-            for i, (label, color, tip) in enumerate(BOX_SLOTS, start=1):
-                print(f"[{i}/{N_BOX}] BOX {label} — {tip}")
-                u, v, r, area, bbox, det_color = get_pixel(
-                    cam, "box", i, N_BOX, want_kind="box",
-                    want_color=color, hint=tip,
-                )
-                xyz, deg = robot_sample(
-                    drv, fk, f"[{i}/{N_BOX}] BOX tip on {label} → c/Enter")
-                print(f"  픽셀 ({u},{v}) {det_color} a={area} -> xyz "
-                      f"({xyz[0]:+.3f},{xyz[1]:+.3f},{xyz[2]:+.3f})")
-                box_samples.append({
-                    "label": label,
-                    "uv": [u, v],
-                    "r_px": None if r is None else float(r),
-                    "area": area,
-                    "bbox": bbox,
-                    "color": det_color or color,
-                    "kind": "box",
-                    "xyz": list(xyz),
-                    "joints_deg": deg,
-                })
+            if args.boxes:
+                print("\n=== Phase 1 완료 → Phase 2: BOX ===\n")
+                for i, (label, color, tip) in enumerate(BOX_SLOTS, start=1):
+                    print(f"[{i}/{N_BOX}] BOX {label} — {tip}")
+                    u, v, r, area, bbox, det_color = get_pixel(
+                        cam, "box", i, N_BOX, want_kind="box",
+                        want_color=color, hint=tip,
+                    )
+                    xyz, deg = robot_sample(
+                        drv, fk, f"[{i}/{N_BOX}] BOX tip on {label} → c/Enter")
+                    print(f"  픽셀 ({u},{v}) {det_color} a={area} -> xyz "
+                          f"({xyz[0]:+.3f},{xyz[1]:+.3f},{xyz[2]:+.3f})")
+                    box_samples.append({
+                        "label": label,
+                        "uv": [u, v],
+                        "r_px": None if r is None else float(r),
+                        "area": area,
+                        "bbox": bbox,
+                        "color": det_color or color,
+                        "kind": "box",
+                        "xyz": list(xyz),
+                        "joints_deg": deg,
+                    })
+            else:
+                print("\n=== Phase 1 완료 → Phase 2: BOX skipped (keep existing) ===\n")
+                box_samples, boxes_by_color = load_existing_boxes()
     except KeyboardInterrupt:
         print("취소 — 저장하지 않음")
         return
@@ -412,7 +464,8 @@ def main():
     H, worst = compute_H(ball_samples)
     if H is None:
         raise SystemExit("호모그래피 실패")
-    print(f"H 재투영 최대오차 {worst * 1000:.1f}mm",
+    print(f"H 재투영 최대오차 {worst * 1000:.1f}mm "
+          f"(from {len(ball_samples)} balls)",
           "(양호)" if worst < 0.015 else "(큼 — 점을 더 넓게/고르게)")
 
     size_z = fit_size_to_z(
@@ -427,13 +480,19 @@ def main():
     air_mean = (np.mean(np.array(air_joints), axis=0).tolist()
                 if air_joints else None)
 
-    boxes_by_color = {"red": [], "blue": []}
-    for s in box_samples:
-        boxes_by_color.setdefault(s["color"], []).append(s)
+    if boxes_by_color is None:
+        boxes_by_color = {"red": [], "blue": []}
+        for s in box_samples:
+            boxes_by_color.setdefault(s["color"], []).append(s)
+
+    n_red = sum(1 for s in ball_samples if s.get("color") == "red")
+    n_blue = sum(1 for s in ball_samples if s.get("color") == "blue")
 
     np.save(OUT_H, H)
     payload = {
         "n_ball": len(ball_samples),
+        "n_ball_red": n_red,
+        "n_ball_blue": n_blue,
         "n_box": len(box_samples),
         "z_air_thresh_m": Z_AIR_THRESH,
         "box_min_area": float(BOX_MIN_AREA),
@@ -451,8 +510,10 @@ def main():
         "air_joints_mean": air_mean,
         "air_joints": air_joints,
         "reproj_max_m": worst,
+        "boxes_preserved": (not args.boxes),
         "note": (
-            "Phase1 ball-8 → H.npy; Phase2 box-4 별도 저장. "
+            f"Phase1 ball-{N_BALL} (red×{N_BALL_PER_COLOR}+blue×{N_BALL_PER_COLOR}) "
+            "→ H.npy; Phase2 boxes kept unless --boxes. "
             "노랑 제외. 공/박스는 area>=BOX_MIN_AREA 로 구분."
         ),
     }
@@ -461,8 +522,9 @@ def main():
             json.dump(payload, f, ensure_ascii=False, indent=2)
         print("저장:", path)
     print("저장:", OUT_H)
-    print(f"balls={len(ball_samples)}  boxes={len(box_samples)}  "
-          f"labels={[s['label'] for s in box_samples]}")
+    print(f"balls={len(ball_samples)} (red={n_red} blue={n_blue})  "
+          f"boxes={len(box_samples)}  "
+          f"labels={[s.get('label') for s in box_samples]}")
 
 
 if __name__ == "__main__":
