@@ -291,6 +291,7 @@ class STS3215Driver:
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
+                exclusive=True,   # 다른 프로세스와 포트 공유 금지
             )
             self.serial.reset_input_buffer()
             self.serial.reset_output_buffer()

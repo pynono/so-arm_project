@@ -71,12 +71,13 @@ class Arm:
                 b.viewer.sync(); time.sleep(b.model.opt.timestep)
 
     # ── 파지 씬 ───────────────────────────────────────────────────────────
-    def grasp(self, ball_xy=None, basket_xy=(0.16, -0.12)):
+    def grasp(self, ball_xy=None, basket_xy=(0.16, -0.12), key_callback=None):
         """빨간 공(+바구니)이 있는 파지 씬으로 창을 연다. 이후 run(STATES)로 집기.
-        ball_xy=(x,y)로 공 위치를 바꿀 수 있다(기본은 grasp_scene.BALL_XY)."""
+        ball_xy=(x,y)로 공 위치를 바꿀 수 있다(기본은 grasp_scene.BALL_XY).
+        key_callback: 뷰어 키 입력 콜백(리플레이 등)."""
         from grasp_scene import build, BALL_XY
         model, data = build(ball_xy=ball_xy or BALL_XY, basket_xy=basket_xy)
-        self._sim = SimBackend(model, data)
+        self._sim = SimBackend(model, data, key_callback=key_callback)
         return self
 
     def ball_xy(self):

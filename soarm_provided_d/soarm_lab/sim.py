@@ -15,7 +15,7 @@ SCENE = os.path.join(_HERE, "models", "SO101", "scene.xml")
 class SimBackend:
     """시뮬 팔. move(각도)로 이동, wait()로 창 열어둠. 손끝 site='gripperframe'.
     model·data 를 주면 그 씬을 쓴다(파지 씬 등). 안 주면 기본 SCENE."""
-    def __init__(self, model=None, data=None, view=True):
+    def __init__(self, model=None, data=None, view=True, key_callback=None):
         if model is None:
             self.model = mujoco.MjModel.from_xml_path(SCENE)
             self.data  = mujoco.MjData(self.model)
@@ -25,7 +25,8 @@ class SimBackend:
         self.viewer = None
         if view and not os.environ.get("SOARM_HEADLESS"):   # 헤드리스 테스트면 창 없이
             import mujoco.viewer as mjv
-            self.viewer = mjv.launch_passive(self.model, self.data)
+            self.viewer = mjv.launch_passive(
+                self.model, self.data, key_callback=key_callback)
             self.viewer.sync()
 
     def move(self, angles_deg, grip=None, secs=1.2):
