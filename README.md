@@ -146,27 +146,8 @@ SCAN ALL → MOVE_TO_BALL → GRIP → MOVE_TO_BOX → PLACE → SAFE
 
 ---
 
-## 6. 알려진 이슈 / 다음 과제
 
-### 이슈
-
-| 이슈 | 내용 |
-|------|------|
-| XY vs Z | 호모그래피는 XY만. Z는 상수/튜닝이라 책상·공 높이 변화에 민감 |
-| Floor slam | 하강이 빠르거나 `Z_PICK`이 낮으면 그리퍼가 바닥을 찍음 |
-| 원거리 자세 | 먼 공에서 j2/j3/j4가 과도하게 펴짐. 거리적응으로 완화했지만 가장자리는 취약 |
-| Load miss ≈ 32 | 미파지 시 `get_load(6)`이 ~32 근처. thresh=100과 구분은 되나 empty/good/wrong-catch 분포는 `--measure-load`로 재확인 |
-
-### 다음으로 손볼 곳
-
-- 원거리 시드 재튜닝
-- `Z_PICK` 현장 재측정
-- load 프로파일로 thresh 검증
-- 박스 taught place와 비전 박스 불일치 시 fallback 점검
-
----
-
-## 7. 주요 파일 경로
+## 6. 주요 파일 경로
 
 | 경로 | 역할 |
 |------|------|
